@@ -1,0 +1,6 @@
+# הקבצים שלך: נשארים במחשב ולא עולים לענן
+materials/*
+!materials/README.md
+packs/*
+!packs/demo-solar-system.json
+!packs/FORMAT.md
