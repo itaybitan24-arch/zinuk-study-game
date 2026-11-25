@@ -286,15 +286,20 @@
       const open = Z.chapterUnlocked(p, i);
       const cp = Z.prog(pid).chapters[c.id];
       const cm = Z.chapterMastery(p, c);
-      path.appendChild(h('li', { class: 'node-wrap', style: { '--i': i } },
+      const hasLesson = !!(c.lesson && c.lesson.length);
+      const seen = !!(cp && cp.lessonSeen);
+      path.appendChild(h('li', { class: 'node-wrap', style: { '--i': i } }, h('div', { class: 'node-col' },
         h('button', { class: 'node ' + (open ? (cp && cp.done ? 'done' : 'open') : 'locked'), disabled: !open,
-          onclick: () => runSession(pid, { kind: 'stage', chapterId: c.id }),
+          onclick: () => (hasLesson && !seen ? runLesson(pid, c.id) : runSession(pid, { kind: 'stage', chapterId: c.id })),
           'aria-label': `שלב ${i + 1}: ${c.title}${open ? '' : ' — נעול'}` },
           h('span', { class: 'node-orb' }, open ? ring(cm, 58, String(i + 1)) : h('span', { class: 'node-lock' }, icon('lock', 20))),
           h('span', { class: 'node-text' },
             h('b', { text: c.title }),
             h('span', { class: 'muted sm', text: open ? (c.summary || c.topics.map((t) => t.title).join(' · ')) : 'נפתח אחרי שתסיים את השלב הקודם' }),
-            open && cp && cp.done ? h('span', { class: 'sm accent', text: `שיא: ${Math.round(cp.best)}% · הערכה ${cm}` }) : null))));
+            open && hasLesson && !seen ? h('span', { class: 'sm gold', text: 'מתחילים בשיעור קצר' }) : null,
+            open && cp && cp.done ? h('span', { class: 'sm accent', text: `שיא: ${Math.round(cp.best)}% · הערכה ${cm}` }) : null)),
+        open && hasLesson ? h('button', { class: 'lesson-btn', onclick: () => runLesson(pid, c.id) }, icon('book', 16),
+          h('span', { text: seen ? 'חזרה על השיעור' : 'לשיעור' })) : null)));
     });
     const bossName = (p.boss && p.boss.name) || 'שומר העולם';
     path.appendChild(h('li', { class: 'node-wrap boss-wrap', style: { '--i': p.chapters.length } },
@@ -311,7 +316,118 @@
   }
 
   /* ---------- סשן תרגול ---------- */
-  const TYPE_LABEL = { mcq: 'אמריקאית', cloze: 'השלמה', tf: 'נכון / לא נכון', explain: 'במילים שלך' };
+  const TYPE_LABEL = { mcq: 'אמריקאית', cloze: 'השלמה', tf: 'נכון / לא נכון', explain: 'במילים שלך', mark: 'סימון במשפט' };
+
+  /* ---------- סימון במשפט: עזרים משותפים לשיעור ולשאלות ---------- */
+  const ROLE_NAME = { sub: 'מילת שעבוד', conj: 'מילת חיבור', subject: 'נושא', pred: 'נשוא', clause: 'פסוקית' };
+  const ROLE_HOW = { sub: 'מקיפים בעיגול', conj: 'מקיפים בעיגול', subject: 'קו אחד מתחת', pred: 'קו כפול מתחת', clause: 'תוחמים בסוגריים' };
+  const ROLE_TASK = {
+    sub: 'הקף את מילת השעבוד',
+    conj: 'הקף את מילת החיבור',
+    subject: 'סמן את הנושא (ראש הנושא – המילה המרכזית)',
+    pred: 'סמן את הנשוא',
+    clause: 'תחום את הפסוקית: לחץ על המילה הראשונה שלה ואז על המילה האחרונה',
+  };
+  const tokText = (t) => t.replace(/~$/, '');
+  function joinTokens(tokens, idxs) {
+    const sorted = idxs.filter((i) => i >= 0).sort((a, b) => a - b);
+    let out = '';
+    sorted.forEach((i, k) => { out += tokText(tokens[i]); if (k < sorted.length - 1) out += (tokens[i].endsWith('~') && sorted[k + 1] === i + 1) ? '' : ' '; });
+    return out;
+  }
+  function sentenceEl(tokens, interactive, onTap) {
+    const box = h('div', { class: 'sentence' + (interactive ? ' interactive' : ''), dir: 'rtl' });
+    const els = tokens.map((t, i) => {
+      const cls = 'tok' + (t.endsWith('~') ? ' joined' : '');
+      const el = interactive ? h('button', { class: cls, type: 'button', onclick: () => onTap(i) }, tokText(t)) : h('span', { class: cls }, tokText(t));
+      box.appendChild(el);
+      return el;
+    });
+    return { box, els };
+  }
+  function paintMark(els, role, idxs) {
+    const real = idxs.filter((i) => i >= 0);
+    real.forEach((i) => els[i].classList.add('m-' + role));
+    if (role === 'clause' && real.length) {
+      els[Math.min(...real)].classList.add('c-start');
+      els[Math.max(...real)].classList.add('c-end');
+    }
+  }
+  function markLine(tokens, role, idxs, hidden) {
+    const text = idxs.includes(-1) ? `${hidden || ''} (נושא סמוי – לא כתוב במשפט)` : joinTokens(tokens, idxs);
+    return h('li', {}, h('span', { class: 'role-dot r-' + role }), h('span', { class: 'muted', text: ROLE_NAME[role] + ': ' }), h('b', { text }));
+  }
+  function legend(roles) {
+    return h('div', { class: 'legend' }, [...new Set(roles)].map((r) =>
+      h('span', { class: 'legend-item' }, h('span', { class: 'tok demo m-' + r + (r === 'clause' ? ' c-start c-end' : '') }, ROLE_NAME[r]), h('span', { class: 'muted sm', text: ROLE_HOW[r] }))));
+  }
+
+  /* ---------- שיעור ---------- */
+  function runLesson(pid, chapterId) {
+    const p = Z.state.packs[pid];
+    const ch = p.chapters.find((c) => c.id === chapterId);
+    if (!ch || !ch.lesson || !ch.lesson.length) return runSession(pid, { kind: 'stage', chapterId });
+    const v = blank();
+    document.body.classList.add('in-play');
+    let i = 0;
+    const bar = h('div', { class: 'dots', 'aria-hidden': 'true' }, ch.lesson.map(() => h('span', { class: 'dot' })));
+    const counter = h('span', { class: 'muted sm' });
+    const stage = h('div', { class: 'q-stage' });
+    append(v, [
+      h('h1', { class: 'sr-only', text: 'שיעור: ' + ch.title }),
+      h('div', { class: 'session-top' },
+        h('button', { class: 'icon-btn', 'aria-label': 'חזרה למפה', onclick: () => go('world', pid) }, icon('close')),
+        h('div', { class: 'session-title' }, h('b', { text: 'שיעור · ' + ch.title }), counter),
+        h('span', { class: 'session-xp lesson-chip' }, icon('book', 16), h('span', { text: 'לומדים' }))),
+      bar, stage]);
+
+    const show = (dir) => {
+      const card = ch.lesson[i];
+      counter.textContent = `כרטיס ${i + 1} מתוך ${ch.lesson.length}`;
+      [...bar.children].forEach((d, k) => { d.classList.toggle('ok', k < i); d.classList.toggle('cur', k === i); });
+      stage.textContent = '';
+      const el = h('article', { class: 'q-card glass lesson-card' + (dir < 0 ? ' back-in' : '') },
+        h('p', { class: 'eyebrow', text: 'שיעור' }),
+        h('h2', { class: 'lesson-title', text: card.title }),
+        card.body.map((b) => h('p', { class: 'lesson-p', text: b })));
+      if (card.example) {
+        const ex = card.example;
+        const s = sentenceEl(ex.tokens, false);
+        const lines = h('ul', { class: 'mark-done' });
+        let k = 0;
+        const stepLabel = h('span', { text: ex.marks.length ? 'הראה לי איך מסמנים' : '' });
+        const stepBtn = h('button', { class: 'btn btn-primary' }, icon('sparkle', 18), stepLabel);
+        const note = ex.note ? h('p', { class: 'lesson-note', text: ex.note }) : null;
+        if (note) note.hidden = ex.marks.length > 0;
+        stepBtn.addEventListener('click', () => {
+          if (k >= ex.marks.length) return;
+          const m = ex.marks[k];
+          paintMark(s.els, m.role, m.idx);
+          lines.appendChild(markLine(ex.tokens, m.role, m.idx, ex.hidden));
+          FX.sfx.tap();
+          k++;
+          if (k < ex.marks.length) stepLabel.textContent = `הסימון הבא (${k + 1}/${ex.marks.length})`;
+          else { stepBtn.remove(); if (note) note.hidden = false; }
+        });
+        append(el, [h('div', { class: 'example' }, h('span', { class: 'eyebrow', text: 'דוגמה' }), s.box,
+          ex.marks.length ? legend(ex.marks.map((m) => m.role)) : null, lines,
+          ex.marks.length ? h('div', { class: 'row' }, stepBtn) : null, note)]);
+      }
+      const last = i === ch.lesson.length - 1;
+      const nextBtn = h('button', { class: 'btn btn-primary' }, last ? 'סיימתי – לתרגול!' : 'הבא', icon('back', 18, 'flip'));
+      nextBtn.addEventListener('click', () => {
+        if (last) { Z.markLessonSeen(p, chapterId); FX.sfx.levelUp(); runSession(pid, { kind: 'stage', chapterId }); }
+        else { i++; show(1); }
+      });
+      el.appendChild(h('div', { class: 'row gap lesson-nav' },
+        i > 0 ? h('button', { class: 'btn btn-ghost', onclick: () => { i--; show(-1); } }, icon('back', 18), 'הקודם') : null,
+        nextBtn));
+      stage.appendChild(el);
+      window.scrollTo({ top: 0, behavior: FX.reduced() ? 'auto' : 'smooth' });
+    };
+    show(1);
+  }
+
 
   function runSession(pid, opts) {
     const p = Z.state.packs[pid];
@@ -573,9 +689,77 @@
       setTimeout(() => ta.focus(), 80);
     }
 
+    if (q.type === 'mark') {
+      card.appendChild(h('h2', { class: 'q-prompt', text: q.prompt }));
+      let ti = 0, sel = new Set(), rangeStart = null, tries = 0;
+      const scores = [];
+      const hint = h('p', { class: 'hint', 'aria-live': 'polite' });
+      const stepLbl = h('div', { class: 'mark-step' });
+      const doneList = h('ul', { class: 'mark-done' });
+      let paint = () => {};
+      const tap = (i) => {
+        if (finished) return;
+        FX.sfx.tap();
+        const t = q.tasks[ti];
+        if (i === -1) sel = sel.has(-1) ? new Set() : new Set([-1]);
+        else if (t.role === 'clause') {
+          if (rangeStart === null) { sel = new Set([i]); rangeStart = i; }
+          else { const a = Math.min(rangeStart, i), b = Math.max(rangeStart, i); sel = new Set(); for (let k = a; k <= b; k++) sel.add(k); rangeStart = null; }
+        } else { sel.delete(-1); if (sel.has(i)) sel.delete(i); else sel.add(i); }
+        paint();
+      };
+      const s = sentenceEl(q.tokens, true, tap);
+      const hiddenChip = h('button', { class: 'tok hidden-chip', type: 'button', onclick: () => tap(-1) }, 'הנושא סמוי (לא כתוב במשפט)');
+      const hiddenRow = h('div', { class: 'hidden-row' }, hiddenChip);
+      paint = () => { s.els.forEach((b, i) => b.classList.toggle('sel', sel.has(i))); hiddenChip.classList.toggle('sel', sel.has(-1)); };
+      const clearSel = () => { sel = new Set(); rangeStart = null; paint(); };
+      const setTask = (msg) => {
+        const t = q.tasks[ti];
+        stepLbl.textContent = '';
+        append(stepLbl, [h('span', { class: 'role-dot r-' + t.role }), h('b', { text: `שלב ${ti + 1} מתוך ${q.tasks.length}: ` }), h('span', { text: t.prompt || ROLE_TASK[t.role] })]);
+        hiddenRow.hidden = t.role !== 'subject';
+        tries = 0; clearSel();
+        hint.textContent = msg || '';
+      };
+      const same = (arr) => arr.length === sel.size && arr.every((x) => sel.has(x));
+      const accept = (t, idxs) => { paintMark(s.els, t.role, idxs); doneList.appendChild(markLine(q.tokens, t.role, idxs, t.hidden)); };
+      let actions = null;
+      const advance = (msg) => {
+        ti++;
+        if (ti < q.tasks.length) return setTask(msg);
+        stepLbl.remove(); hiddenRow.remove(); actions.remove(); hint.textContent = '';
+        s.els.forEach((b) => b.classList.remove('sel'));
+        const sc = scores.reduce((a, b) => a + b, 0) / scores.length;
+        finish({ score: sc, mode: sc === 1 ? 'first' : 'self', label: sc === 1 ? 'ניתוח מושלם!' : sc >= 0.6 ? 'ניתוח טוב' : 'עכשיו ראית איך מסמנים נכון' });
+      };
+      const check = () => {
+        if (finished) return;
+        if (!sel.size) { hint.textContent = 'קודם בחר מילים במשפט.'; return; }
+        const t = q.tasks[ti];
+        if (same(t.answer) || t.accept.some(same)) {
+          FX.sfx.correct(); FX.buzz(10);
+          scores.push(tries === 0 ? 1 : 0.35);
+          accept(t, [...sel]);
+          advance(tries === 0 ? 'מצוין!' : 'נכון, בניסיון השני.');
+        } else {
+          tries++;
+          FX.sfx.wrong();
+          card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+          if (tries >= 2) { scores.push(0); accept(t, t.answer); advance('הנה הסימון הנכון – שים לב אליו.'); }
+          else hint.textContent = (t.role === 'subject' ? 'לא מדויק. זכור: מסמנים רק את ראש הנושא – המילה המרכזית. ' : t.role === 'clause' ? 'לא מדויק. הפסוקית מתחילה במילת השעבוד. ' : 'לא מדויק. ') + 'נסה שוב.';
+        }
+      };
+      actions = h('div', { class: 'row gap wrap' },
+        h('button', { class: 'btn btn-primary', onclick: check }, icon('check', 18), 'בדיקה'),
+        h('button', { class: 'btn btn-ghost', onclick: clearSel }, 'ניקוי'));
+      append(area, [stepLbl, h('div', { class: 'example' }, s.box, hiddenRow), legend(q.tasks.map((t) => t.role)), actions, hint, doneList]);
+      setTask();
+    }
+
     card.append(area, fb);
     return card;
   }
+
 
   /* ---------- Level up ---------- */
   let luQueue = Promise.resolve();

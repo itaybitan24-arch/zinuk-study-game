@@ -189,7 +189,9 @@
   function buildStage(pack, chapterId) {
     const idx = topicIndex(pack);
     const inCh = pack.questions.filter((q) => idx[q.topic].chapterId === chapterId);
-    const main = pickTop(pack, inCh, 8);
+    // שאלות סימון הן לב התרגול כשיש כאלה: עד 4 בכל סבב
+    const marks = pickTop(pack, inCh.filter((q) => q.type === 'mark'), 4);
+    const main = marks.concat(pickTop(pack, inCh.filter((q) => q.type !== 'mark'), 8 - marks.length));
     const p = prog(pack.id);
     const weakOther = pack.questions.filter((q) => {
       const ch = idx[q.topic].chapterId;
@@ -211,7 +213,7 @@
   }
 
   function buildBoss(pack) {
-    const pool = pack.questions.filter((q) => q.type !== 'explain');
+    const pool = pack.questions.filter((q) => q.type !== 'explain' && q.type !== 'mark');
     const picked = pool.map((q) => ({ q, s: priority(pack, q) * 0.6 + q.difficulty * 25 + Math.random() * 30 }))
       .sort((a, b) => b.s - a.s).slice(0, 10).map((x) => x.q);
     return shuffle(picked);
@@ -252,6 +254,14 @@
     return first;
   }
 
+  function markLessonSeen(pack, chapterId) {
+    const p = prog(pack.id);
+    const c = p.chapters[chapterId] || { done: false, best: 0, plays: 0 };
+    c.lessonSeen = true;
+    p.chapters[chapterId] = c;
+    save();
+  }
+
   function finishBoss(pack, won, hits) {
     const p = prog(pack.id);
     p.boss.tries++;
@@ -276,6 +286,6 @@
     TIERS, levelInfo, tierIndex, needFor,
     mastery, packMastery, chapterMastery, confidence, topicRaw,
     recordAnswer, addXp, buildStage, buildSmart, buildBoss,
-    chapterUnlocked, bossStatus, finishStage, finishBoss, weakestTopics, shuffle,
+    chapterUnlocked, bossStatus, finishStage, markLessonSeen, finishBoss, weakestTopics, shuffle,
   };
 })();
