@@ -110,6 +110,18 @@
         h('button', { class: 'icon-btn', onclick: () => go('stats'), 'aria-label': 'סטטיסטיקות', title: 'סטטיסטיקות' }, icon('chart')),
         h('button', { class: 'icon-btn', onclick: () => go('data'), 'aria-label': 'גיבוי והגדרות', title: 'גיבוי והגדרות' }, icon('shield')),
         chip));
+    renderBottomNav();
+  }
+
+  /* סרגל ניווט תחתון — מוצג רק בטלפון */
+  let current = 'home';
+  function renderBottomNav() {
+    const nav = document.getElementById('bottomnav');
+    if (!nav) return;
+    nav.textContent = '';
+    const tab = (screen, ic, label) => h('button', { class: 'tab' + (current === screen ? ' active' : ''), 'aria-current': current === screen ? 'page' : null,
+      onclick: () => { FX.sfx.tap(); go(screen); } }, icon(ic, 22), h('span', { text: label }));
+    append(nav, [tab('home', 'book', 'עולמות'), tab('stats', 'chart', 'התקדמות'), tab('data', 'shield', 'גיבוי')]);
   }
 
   /* ---------- ניווט ---------- */
@@ -117,7 +129,7 @@
   function blank() {
     if (cleanup) { cleanup(); cleanup = null; }
     document.onkeydown = null;
-    document.body.classList.remove('boss-mode');
+    document.body.classList.remove('boss-mode', 'in-play');
     const v = $view();
     v.textContent = '';
     v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter');
@@ -126,6 +138,7 @@
     return v;
   }
   function go(screen, arg) {
+    current = screen === 'world' ? 'home' : screen;
     const v = blank();
     ({ home: renderHome, world: renderWorld, stats: renderStats, data: renderData })[screen](arg);
     const hd = v.querySelector('h1'); if (hd) { hd.setAttribute('tabindex', '-1'); hd.focus({ preventScroll: true }); }
@@ -311,6 +324,7 @@
     const session = { xp: 0, firstOk: 0, n: qs.length, i: 0, touched: new Set() };
 
     const v = blank();
+    document.body.classList.add('in-play');
     const dots = h('div', { class: 'dots', 'aria-hidden': 'true' }, qs.map(() => h('span', { class: 'dot' })));
     const counter = h('span', { class: 'muted sm' });
     const top = h('div', { class: 'session-top' },
@@ -467,7 +481,7 @@
         }
       };
       document.onkeydown = (e) => { const n = parseInt(e.key, 10); if (!finished && n >= 1 && n <= btns.length) btns[n - 1].click(); };
-      append(area, [list, hint]);
+      append(area, [list, hint, h('p', { class: 'kbd-hint', text: 'מקלדת: 1–' + btns.length + ' לבחירה · Enter להמשך' })]);
     }
 
     if (q.type === 'cloze') {
@@ -604,7 +618,7 @@
     const S = { hp: need, hearts: 3, i: 0, hits: 0, xp: 0, timer: null, over: false };
 
     const v = blank();
-    document.body.classList.add('boss-mode');
+    document.body.classList.add('boss-mode', 'in-play');
     const fig = FX.bossFigure(150);
     const hpFill = h('span', { class: 'hp-fill' });
     const hearts = h('div', { class: 'hearts', 'aria-label': 'חיים' });
@@ -790,15 +804,16 @@
           h('div', { class: 'row gap wrap' }, weak.map((t) => h('span', { class: 'pill pill-warm', text: `${t.title} · ~${t.m}` }))),
           h('button', { class: 'btn btn-primary btn-sm', onclick: () => runSession(p.id, { kind: 'smart' }) }, 'אימון חכם על החלשים')));
       }
+      const grid = h('div', { class: 'ch-grid' });
+      sec.appendChild(grid);
       p.chapters.forEach((c) => {
-        sec.appendChild(h('h3', { class: 'ch-title', text: c.title }));
-        sec.appendChild(h('ul', { class: 'bars' }, c.topics.map((t) => {
+        grid.appendChild(h('div', { class: 'ch-block' }, h('h3', { class: 'ch-title', text: c.title }), h('ul', { class: 'bars' }, c.topics.map((t) => {
           const m = Z.mastery(p.id, t.id);
           return h('li', {},
             h('div', { class: 'row between' }, h('span', { text: t.title }), h('span', { class: 'muted sm', text: `~${m} · ${Z.confidence(p.id, t.id)}` })),
             h('span', { class: 'bar', role: 'meter', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': m, 'aria-label': `הערכת שליטה ב${t.title}` },
               h('span', { class: 'bar-fill ' + (m >= 75 ? 'hi' : m >= 45 ? 'mid' : 'lo'), style: { width: Math.max(2, m) + '%' } })));
-        })));
+        }))));
       });
       v.appendChild(sec);
     });
