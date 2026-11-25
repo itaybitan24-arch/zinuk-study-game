@@ -22,10 +22,12 @@
       }
     } catch (e) { /* localStorage חסום או פגום — מתחילים נקי */ }
     // חבילת הדמו תמיד נטענת מהגרסה העדכנית
-    if (window.DEMO_PACK) {
-      const r = window.ZValidate.validatePack(window.DEMO_PACK);
+    // חבילות מובנות (דמו + חבילות שהוכנסו לתוכנה) — תמיד בגרסה העדכנית, ההתקדמות נשמרת לפי המזהה
+    [window.DEMO_PACK].concat(window.BUILTIN_PACKS || []).forEach((raw) => {
+      if (!raw) return;
+      const r = window.ZValidate.validatePack(raw);
       if (r.ok) state.packs[r.pack.id] = r.pack;
-    }
+    });
     return state;
   }
 
